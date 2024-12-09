@@ -1,0 +1,96 @@
+name: ci-cd
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/ci-cd.yaml
+      - legow/**
+      - tests/**
+  release:
+    types:
+      - published
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  quality-and-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python ${{ matrix.python }}
+        run: uv python install ${{ matrix.python }}
+
+      - name: Install the project
+        env:
+          UV_INDEX_OWKIN_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          UV_INDEX_OWKIN_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+        run: uv sync --all-extras
+
+      - name: Quality checks
+        run: uv run pre-commit run --all-files
+
+      - name: run-tests
+        if: matrix.python != '3.10'
+        run: uv run pytest --cov=legow
+
+      - name: run-tests-with-coverage
+        if: matrix.python == '3.10'
+        run: uv run pytest --cov=legow --cov-report term --cov-report html:/home/runner/cov_html
+
+      - name: Archive code coverage results
+        if: matrix.python == '3.10' && github.event.action == 'ready_for_review'
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-coverage-report
+          path: /home/runner/cov_html
+
+      - name: Checkout to current branch for coverage update
+        if: github.event_name == 'pull_request' && matrix.python == '3.10' && github.event.action == 'ready_for_review'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GIT_TOKEN }}
+
+      - name: Generate coverage status
+        if: github.event_name == 'pull_request' && matrix.python == '3.10' && github.event.action == 'ready_for_review'
+        run: |
+          set -x
+          total_cov=$(grep -Eo '<span class="pc_cov">[0-9]+%</span>' /home/runner/cov_html/index.html | grep -Eo '[0-9]+')
+          echo $total_cov
+          if [ "$total_cov" -le "50" ] ; then
+          COLOR=red
+          elif [ "$total_cov" -ge "90" ] ; then
+          COLOR=green
+          else
+          COLOR=orange
+          fi
+          echo $COLOR
+          echo "https://img.shields.io/badge/coverage-${total_cov}%25-${COLOR}"
+          curl "https://img.shields.io/badge/coverage-${total_cov}%25-${COLOR}" > assets/cov_badge.svg
+          echo "" >> assets/cov_badge.svg
+
+      - name: Commit coverage badge
+        if: github.event_name == 'pull_request' && matrix.python == '3.10' && github.event.action == 'ready_for_review'
+        uses: EndBug/add-and-commit@v9
+        with:
+            add: assets/cov_badge.svg
+            default_author: github_actor
+            pull: '--no-rebase'
+            message: 'update coverage badge'
