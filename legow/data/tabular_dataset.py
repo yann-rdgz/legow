@@ -15,7 +15,8 @@ class TabularDataset:
         Initializes the TabularDataset with data and validators.
 
         :param data: List of dictionaries representing rows of the dataset.
-        :param validators: Dictionary where keys are column names and values are functions to validate the column values.
+        :param validators: Dictionary where keys are column names and values are
+        functions to validate the column values.
         """
         pass
 
